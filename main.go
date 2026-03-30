@@ -6,6 +6,8 @@ import (
 	"go/ast"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"strings"
 	"text/template"
 	"time"
@@ -41,15 +43,17 @@ type Field struct {
 
 	IsSlice       bool
 	SliceElemKind string
+	CountKind     string // Count prefix kind for slices: "u8"(default), "u16", "u32"
 
 	IsStruct     bool
+	StructName   string
 	StructFields []Field
 }
 
 type Packet struct {
 	Name   string
 	Flow   Flow
-	Opcode string // e.g. "Lobby" -> OpcodeLobby
+	Opcode string // e.g. "Lobby"         -> OpcodeLobby
 	Action string // e.g. "LobbyCharList" -> LobbyCharList.Action()
 	Fields []Field
 }
@@ -90,6 +94,51 @@ func (f Field) ReadMethod() string {
 	}
 
 	return "ReadUnknown_" + f.Kind
+}
+
+func (f Field) CountWriteMethod() string {
+	switch f.CountKind {
+	case "u8", "uint8":
+		return "WriteUint8"
+	case "u16", "uint16":
+		return "WriteUint16"
+	case "u32", "uint32":
+		return "WriteUint32"
+	case "u64", "uint64":
+		return "WriteUint64"
+	default:
+		return "WriteUint8"
+	}
+}
+
+func (f Field) CountReadMethod() string {
+	switch f.CountKind {
+	case "u8", "uint8":
+		return "ReadUint8"
+	case "u16", "uint16":
+		return "ReadUint16"
+	case "u32", "uint32":
+		return "ReadUint32"
+	case "u64", "uint64":
+		return "ReadUint64"
+	default:
+		return "ReadUint8"
+	}
+}
+
+func (f Field) CountCastType() string {
+	switch f.CountKind {
+	case "u8", "uint8":
+		return "uint8"
+	case "u16", "uint16":
+		return "uint16"
+	case "u32", "uint32":
+		return "uint32"
+	case "u64", "uint64":
+		return "uint64"
+	default:
+		return "uint8"
+	}
 }
 
 // WriteArg produces the expression passed to the Write method.
@@ -427,13 +476,22 @@ func ParseFields(pkg *packages.Package, pkgMap map[string]*packages.Package, str
 
 		kind, strong, isStruct := resolveTypeInfo(pkg, targetExpr)
 
+		countKind := "u8"
+		if f.Tag != nil {
+			tag := strings.Trim(f.Tag.Value, "`")
+			if v := reflect.StructTag(tag).Get("count"); v != "" {
+				countKind = v
+			}
+		}
+
+		var structName string
 		var structFields []Field
 		if isStruct {
-			typeStr := strong
-			if typeStr == "" {
-				typeStr = kind
+			structName = strong
+			if structName == "" {
+				structName = kind
 			}
-			structFields = FindStructFields(pkgMap, typeStr)
+			structFields = FindStructFields(pkgMap, structName)
 		}
 
 		for _, nameIdent := range f.Names {
@@ -442,7 +500,9 @@ func ParseFields(pkg *packages.Package, pkgMap map[string]*packages.Package, str
 				Kind:         kind,
 				KindStrong:   strong,
 				IsSlice:      isSlice,
+				CountKind:    countKind,
 				IsStruct:     isStruct,
+				StructName:   structName,
 				StructFields: structFields,
 			}
 			if isSlice {
@@ -460,11 +520,33 @@ func ParseFields(pkg *packages.Package, pkgMap map[string]*packages.Package, str
 // across all loaded packages and returns its parsed fields.
 func FindStructFields(pkgMap map[string]*packages.Package, strongType string) []Field {
 	parts := strings.SplitN(strongType, ".", 2)
-	if len(parts) != 2 {
+	if len(parts) == 1 {
+		for _, p := range pkgMap {
+			for _, file := range p.Syntax {
+				for _, decl := range file.Decls {
+					genDecl, ok := decl.(*ast.GenDecl)
+					if !ok {
+						continue
+					}
+					for _, spec := range genDecl.Specs {
+						ts, ok := spec.(*ast.TypeSpec)
+						if !ok || ts.Name.Name != strongType {
+							continue
+						}
+						st, ok := ts.Type.(*ast.StructType)
+						if !ok {
+							continue
+						}
+						return ParseFields(p, pkgMap, st)
+					}
+				}
+			}
+		}
+		logs.Warnf("FindStructFields: type %q not found", strongType)
 		return nil
 	}
-	pkgShort, typeName := parts[0], parts[1]
 
+	pkgShort, typeName := parts[0], parts[1]
 	for _, p := range pkgMap {
 		if p.Name != pkgShort {
 			continue
@@ -514,9 +596,9 @@ func parseType(e ast.Expr) (kind string, isSlice bool) {
 
 // resolveTypeInfo breaks an AST expression into (kind, strong, isStruct).
 //
-//   - Primitive field  uint16          → ("uint16",  "",                false)
-//   - Strong-typed     character.Level → ("uint8",   "character.Level", false)
-//   - Struct           character.Character → ("struct", "character.Character", true)
+//   - Primitive field  uint16              -> ("uint16", "",                    false)
+//   - Strong-typed     character.Level     -> ("uint8",  "character.Level",     false)
+//   - Struct           character.Character -> ("struct", "character.Character", true)
 func resolveTypeInfo(pkg *packages.Package, expr ast.Expr) (kind, strong string, isStruct bool) {
 	// Get the actual string representation from AST (e.g., "character.ID" or "uint32")
 	astName, _ := parseType(expr)
@@ -646,7 +728,7 @@ func Encode{{.FuncName}}(buf []byte, p *{{.Name}}) []byte {
 	{{- range .Fields}}
 	{{- $f := .}}
 	{{- if .IsSlice}}
-	w.WriteUint16(uint16(len(p.{{.Name}})))
+	w.{{.CountWriteMethod}}({{.CountCastType}}(len(p.{{.Name}})))
 	for _, v := range p.{{.Name}} {
 		{{- if .IsStruct}}
 		{{- range .StructFields}}
@@ -677,7 +759,7 @@ func Decode{{.FuncName}}(payload []byte, p *{{.Name}}) error {
 	{{- if .IsSlice}}
 	{	
 		if err != nil { return err }
-		count, err := r.ReadUint16()
+		count, err := r.{{.CountReadMethod}}()
 		if err != nil { return err }
 		p.{{.Name}} = make([]{{if .KindStrong}}{{.KindStrong}}{{else}}{{.Kind}}{{end}}, count)
 		for i := range p.{{.Name}} {
@@ -720,26 +802,17 @@ func Decode{{.FuncName}}(payload []byte, p *{{.Name}}) error {
 {{end}}
 {{- end}}`
 
-// ─── Godot template ───────────────────────────────────────────────────────────
-//
-// Design aligned with the existing GameProtocol.gd patterns:
-//
-//  Flow direction (critical — was inverted before):
-//    S2C  → client DECODES  → generates  static func from_payload(...) -> T
-//    C2S  → client ENCODES  → generates  func to_packet() -> PackedByteArray
-//    Both → generates both
-//
 //  StreamPeerBuffer usage:
-//    decode: create inside from_payload, assign data_array, read with _s.*
-//    encode: create inside to_packet, write with _s.*, return _s.data_array
+//    decode: create inside decode, assign data_array, read with _s.*
+//    encode: create inside encode, write with _s.*, return _s.data_array
 //    big_endian is NOT set — default is LE, matching Go's binary.LittleEndian.
 //
 //  Strings (u8-length-prefixed UTF-8):
-//    decode → _s.get_utf8_string(_s.get_u8())   (clean Godot 4 API)
-//    encode → var _b = v.to_utf8_buffer(); _s.put_u8(_b.size()); _s.put_data(_b)
+//    decode -> _s.get_utf8_string(_s.get_u8())   (clean Godot 4 API)
+//    encode -> var _b = v.to_utf8_buffer(); _s.put_u8(_b.size()); _s.put_data(_b)
 //
 //  Action enum reference:
-//    "Lobby" + "LobbyCharList" → GameProtocol.LobbyAction.CHAR_LIST
+//    "Lobby" + "LobbyCharList" -> GameProtocol.LobbyAction.CHAR_LIST
 //    resolved at generation time by to_gd_action(opcode, action).
 //
 //  The generated file preloads GameProtocol so enums don't need to be duplicated.
@@ -777,56 +850,66 @@ class Packet:
 # {{.Name}} — Flow: {{.Flow}}
 # Code generated by GenProtocol; DO NOT EDIT.
 class {{.Name}}:
-
 	{{- range .Fields}}
-	static var {{.Name | to_snake}}:{{.Kind | to_gd_type}}{{if .IsSlice}} = []{{end}}
+	{{- if .IsSlice}}
+	var {{.Name | to_snake}}:Array[{{if .IsStruct}}{{.StructName}}{{else}}{{.Kind | to_gd_type}}{{end}}]
+	{{- else}}
+	var {{.Name | to_snake}}:{{.Kind | to_gd_type}}
 	{{- end}}
+{{- end}}
 
-	{{- if or (eq .Flow "ClientEncode") (eq .Flow "Client2Server") (eq .Flow "Both")}}
+{{- if or (eq .Flow "ClientEncode") (eq .Flow "Client2Server") (eq .Flow "Both")}}
+
 	static func encode(stream:StreamPeerBuffer) -> PackedByteArray:
 		{{- range .Fields}}
 		{{- if .IsSlice}}
-		stream.put_u16({{.Name | to_snake}}.size())
-		for _v in {{.Name | to_snake}}:
-			{{.Kind | to_gd_put "_v"}}
-		{{- else if eq .Kind "string"}}
-		var {{.Name | to_snake}} = stream.to_utf8_buffer()
-		stream.put_u8({{.Name | to_snake}}.size())
-		stream.put_data({{.Name | to_snake}})
+		stream.{{.CountKind | to_gd_count_put}}({{.Name | to_snake}}.size())
+		for value in {{.Name | to_snake}}:
+		{{to_gd_write . "value"}}
 		{{- else}}
-		{{.Kind | to_gd_put (.Name | to_snake)}}
+		{{to_gd_write . (.Name | to_snake)}}
 		{{- end}}
 		{{- end}}
 		return stream.data_array
-		{{- end}}
+{{end}}
 
-	{{- if or (eq .Flow "ClientDecode") (eq .Flow "Server2Client") (eq .Flow "Both")}}
+{{- if or (eq .Flow "ClientDecode") (eq .Flow "Server2Client") (eq .Flow "Both")}}
+
 	static func decode(payload:PackedByteArray) -> {{.Name}}:
 		if payload.is_empty():
 			push_error("{{.Name}}.decode: empty payload")
 			return null
-		var p := {{.Name}}.new()
+
+		var packet := {{.Name}}.new()
 		var stream := StreamPeerBuffer.new()
 		stream.data_array = payload
 
 		{{- range .Fields}}
 		{{- if .IsSlice}}
-		var _cnt_{{.Name | to_snake}} := stream.get_u16()
-		p.{{.Name | to_snake}}.resize(_cnt_{{.Name | to_snake}})
-		for _i in _cnt_{{.Name | to_snake}}:
-			p.{{.Name | to_snake}}[_i] = {{.Kind | to_gd_get}}
-		{{- else if eq .Kind "string"}}
-		p.{{.Name | to_snake}} = stream.get_utf8_string(stream.get_u8())
+		var count_{{.Name | to_snake}} := stream.{{.CountKind | to_gd_count_get}}
+		packet.{{.Name | to_snake}}.resize(count_{{.Name | to_snake}})
+		{{- if .IsStruct}}
+
+		for i in range(count_{{.Name | to_snake}}):
+			var item := {{.StructName}}.new()
+			{{- range .StructFields}}
+			item.{{.Name | to_snake}} = {{. | to_gd_read}}
+			{{- end}}
+			packet.{{.Name | to_snake}}[i] = item
 		{{- else}}
-		p.{{.Name | to_snake}} = {{.Kind | to_gd_get}}
+		for i in range(count_{{.Name | to_snake}})
+			packet.{{.Name | to_snake}}[i] = {{. | to_gd_read}}
+		{{- end}}
+		{{- else}}
+		packet.{{.Name | to_snake}} = {{. | to_gd_read}}
 		{{- end}}
 		{{- end}}
-		return p
+		return packet
 	{{- end}}
-{{- end}}
+	{{- end}}
 {{end}}`
 
-// camelToUpperSnake converts "CharList" → "CHAR_LIST".
+// camelToUpperSnake converts "CharList" -> "CHAR_LIST".
 func camelToUpperSnake(s string) string {
 	var b strings.Builder
 	for i, r := range s {
@@ -835,54 +918,83 @@ func camelToUpperSnake(s string) string {
 		}
 		b.WriteRune(unicode.ToUpper(r))
 	}
+
 	return b.String()
 }
 
+var (
+	matchFirstCap = regexp.MustCompile(`(.)([A-Z][a-z]+)`)
+	matchAllCap   = regexp.MustCompile(`([a-z0-9])([A-Z])`)
+)
+
+func gdCountGet(kind string) string {
+	switch kind {
+	case "u8", "uint8":
+		return "get_u8()"
+	case "u16", "uint16":
+		return "get_u16()"
+	case "u32", "uint32":
+		return "get_u32()"
+	case "u64", "uint64":
+		return "get_u64()"
+	default:
+		return "get_u8()"
+	}
+}
+
+func gdCountPut(kind string) string {
+	switch kind {
+	case "u8", "uint8":
+		return "put_u8"
+	case "u16", "uint16":
+		return "put_u16"
+	case "u32", "uint32":
+		return "put_u32"
+	case "u64", "uint64":
+		return "put_u64"
+	default:
+		return "put_u8"
+	}
+}
+
 var funcMap = template.FuncMap{
-	// camelCase → snake_case  (ClassID → class_id)
 	"to_snake": func(s string) string {
-		var b strings.Builder
-		for i, r := range s {
-			if i > 0 && unicode.IsUpper(r) {
-				b.WriteByte('_')
-			}
-			b.WriteRune(unicode.ToLower(r))
-		}
-		return b.String()
+		s = matchFirstCap.ReplaceAllString(s, `${1}_${2}`)
+		s = matchAllCap.ReplaceAllString(s, `${1}_${2}`)
+		return strings.ToLower(s)
 	},
 
-	// "Lobby" → "LOBBY"  (used for Opcode enum key)
 	"to_upper": strings.ToUpper,
 
-	// Go primitive kind → GDScript static type annotation.
+	// Go primitive kind -> GDScript static type annotation.
 	"to_gd_type": func(kind string) string {
 		switch kind {
+		case "uint8", "uint16", "uint32", "uint64":
+			return "int"
 		case "string":
 			return "String"
 		case "bool":
 			return "bool"
 		default:
-			return "int"
+			return "# BUG: Unknown Kind " + kind
 		}
 	},
 
-	// to_gd_action("Lobby", "LobbyCharList") → "GameProtocol.LobbyAction.CHAR_LIST"
-	// to_gd_action("Auth",  "AuthLogin")      → "GameProtocol.AuthAction.LOGIN"
+	// to_gd_action("Lobby", "LobbyCharList") -> "GameProtocol.LobbyAction.CHAR_LIST"
+	// to_gd_action("Auth",  "AuthLogin")     -> "GameProtocol.AuthAction.LOGIN"
 	//
 	// Algorithm:
 	//   1. Strip the opcode prefix from the action name.
 	//   2. Convert remaining CamelCase to UPPER_SNAKE.
 	//   3. Emit "GameProtocol.<Opcode>Action.<UPPER_SNAKE>".
 	"to_gd_action": func(opcode, action string) string {
-		actionSuffix := strings.TrimPrefix(action, opcode) // "LobbyCharList" → "CharList"
+		actionSuffix := strings.TrimPrefix(action, opcode) // "LobbyCharList" -> "CharList"
 		return "GameProtocol." + opcode + "Action." + camelToUpperSnake(actionSuffix)
 	},
 
-	// to_gd_get returns the StreamPeerBuffer read expression for a primitive kind.
-	// The stream variable is always named "_s" inside generated methods.
-	// String is handled inline in the template (get_utf8_string), not here.
-	"to_gd_get": func(kind string) string {
-		switch kind {
+	// {{. | to_gd_read}}
+	"to_gd_read": func(f Field) string {
+		switch f.Kind {
 		case "uint8":
 			return "stream.get_u8()"
 		case "uint16":
@@ -893,26 +1005,65 @@ var funcMap = template.FuncMap{
 			return "stream.get_u64()"
 		case "bool":
 			return "stream.get_u8() != 0"
+		case "string":
+			return "stream.get_utf8_string(stream." + gdCountGet(f.CountKind) + ")"
+		default:
+			return "# BUG: Unknown Kind " + f.Kind
+		}
+	},
+
+	// {{. | to_gd_write}}
+	"to_gd_write": func(f Field, varName string) string {
+		switch f.Kind {
+		case "string":
+			b := "_b_" + varName
+			return fmt.Sprintf(
+				"var %s := %s.to_utf8_buffer()\n\t\tstream.%s(%s.size())\n\t\tstream.put_data(%s)",
+				b, varName, gdCountPut(f.CountKind), b, b,
+			)
+		case "bool":
+			return fmt.Sprintf("stream.put_u8(1 if %s else 0)", varName)
+		default:
+			put := map[string]string{
+				"uint8":  "put_u8",
+				"uint16": "put_u16",
+				"uint32": "put_u32",
+				"uint64": "put_u64",
+			}
+			if m, ok := put[f.Kind]; ok {
+				return fmt.Sprintf("stream.%s(%s)", m, varName)
+			}
+			return "# BUG: Unknown Kind " + f.Kind
+		}
+	},
+
+	//{{.CountKind | to_gd_count_get}}
+	"to_gd_count_get": func(kind string) string {
+		switch kind {
+		case "u8", "uint8":
+			return "get_u8()"
+		case "u16", "uint16":
+			return "get_u16()"
+		case "u32", "uint32":
+			return "get_u32()"
+		case "u64", "uint64":
+			return "get_u64()"
 		default:
 			return "# BUG: Unknown Kind " + kind
 		}
 	},
 
-	// to_gd_put(varName, kind) returns the StreamPeerBuffer write statement.
-	// In Go templates: {{.Kind | to_gd_put "myVar"}} calls to_gd_put("myVar", .Kind).
-	// String is handled inline in the template, not here.
-	"to_gd_put": func(varName, kind string) string {
+	//{{.CountKind | to_gd_count_put}}
+	"to_gd_count_put": func(kind string) string {
 		switch kind {
-		case "uint8":
-			return "stream.put_u8(" + varName + ")"
-		case "uint16":
-			return "stream.put_u16(" + varName + ")"
-		case "uint32":
-			return "stream.put_u32(" + varName + ")"
-		case "uint64":
-			return "stream.put_u64(" + varName + ")"
-		case "bool":
-			return "stream.put_u8(1 if " + varName + " else 0)"
+		case "u8", "uint8":
+			return "put_u8"
+		case "u16", "uint16":
+			return "put_u16"
+		case "u32", "uint32":
+			return "put_u32"
+		case "u64", "uint64":
+			return "put_u64"
 		default:
 			return "# BUG: Unknown Kind " + kind
 		}
