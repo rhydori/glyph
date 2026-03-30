@@ -136,42 +136,57 @@ var goTypeToBufferMethod = map[string]string{
 }
 
 func main() {
-	inFile := flag.String("in", "../../server/gameserver/internal/protocol/packets.go", "")
-	outDir := flag.String("out", "./generated/", "")
+	inDir := flag.String("in", "../../server/gameserver/internal/protocol/", "")
+	inFile := flag.String("file", "packets.go", "")
+	goOutDir := flag.String("goout", "../../server/gameserver/internal/protocol/", "")
+	gdOutDir := flag.String("gdout", "../../client/scripts/backend/game/protocol/", "")
 	goFile := flag.String("go", "codec.go", "")
 	gdFile := flag.String("gd", "codec.gd", "")
 	flag.Parse()
 
-	if *inFile == "" || *outDir == "" {
+	if *inDir == "" || *inFile == "" || *goOutDir == "" || *gdOutDir == "" {
 		logs.Warn("Missing required flags.")
-
+		if *inDir == "" {
+			logs.Error("Flag '-in' is required. Input directory for packet definitions")
+			logs.Info("Example: -in ../../server/gameserver/internal/protocol/")
+		}
 		if *inFile == "" {
-			logs.Error("Flag '-in' is required. Input file with packet definitions")
-			logs.Info("Example: -in ../../gameserver/internal/protocol/packets.go")
+			logs.Error("Flag '-file' is required. Input file with packet definitions")
+			logs.Info("Example: -file packets.go")
 		}
-		if *outDir == "" {
-			logs.Error("Flag '-out' is required. Output path for the generated codec")
-			logs.Info("Example: -out ./generated/")
+		if *goOutDir == "" {
+			logs.Error("Flag '-goout' is required. Output directory for the Go codec")
+			logs.Info("Example: -goout ./generated/")
 		}
-
+		if *gdOutDir == "" {
+			logs.Error("Flag '-gdout' is required. Output directory for the Godot codec")
+			logs.Info("Example: -gdout ./generated/")
+		}
 		logs.Fatal("Fatal Error. See above for details.")
 	}
 
-	logs.Infof("Processing '%s' -> '%s%s'", *inFile, *outDir, *goFile)
-	logs.Infof("Processing '%s' -> '%s%s'", *inFile, *outDir, *gdFile)
+	inFilePath := filepath.Join(*inDir, *inFile)
+	goOutFilePath := filepath.Join(*goOutDir, *goFile)
+	gdOutFilePath := filepath.Join(*gdOutDir, *gdFile)
 
-	rootPkg, _, packets, err := ParsePackets(*inFile)
+	logs.Infof("Processing '%s' -> '%s'", inFilePath, goOutFilePath)
+	logs.Infof("Processing '%s' -> '%s'", inFilePath, gdOutFilePath)
+
+	// Remove the previously generated codec so stale code doesn't break package loading.
+	os.Remove(goOutFilePath)
+
+	rootPkg, _, packets, err := ParsePackets(inFilePath)
 	if err != nil {
 		logs.Fatalf("Failed to parse packets '%v'", err)
 	}
 
 	importPaths := CollectImports(rootPkg, packets)
 
-	if err := GenerateGoFile(*outDir, *goFile, packets, importPaths); err != nil {
+	if err := GenerateGoFile(*goOutDir, *goFile, packets, importPaths); err != nil {
 		logs.Fatalf("Failed to generate Go file: %v", err)
 	}
 
-	if err := GenerateGodotFile(*outDir, *gdFile, packets); err != nil {
+	if err := GenerateGodotFile(*gdOutDir, *gdFile, packets); err != nil {
 		logs.Fatalf("Failed to generate Godot file: %v", err)
 	}
 
@@ -293,10 +308,25 @@ func CollectImports(pkg *packages.Package, packets []Packet) []string {
 	uniquePaths := make(map[string]bool)
 	var result []string
 
-	var collectField func(Field)
-	collectField = func(field Field) {
-		shortName := field.GetPackageName()
+	needsDeeps := func(flow Flow) bool {
+		return flow == FlowServerDecode ||
+			flow == FlowClientDecode ||
+			flow == FlowClientToServer ||
+			flow == FlowBoth
+	}
 
+	var collectField func(Field, Flow)
+	collectField = func(field Field, flow Flow) {
+		// Struct types only appear by name in make([]T, n) inside decode.
+		// Skip adding their package import for encode-only flows.
+		if field.IsStruct && !needsDeeps(flow) {
+			for _, sf := range field.StructFields {
+				collectField(sf, flow)
+			}
+			return
+		}
+
+		shortName := field.GetPackageName()
 		if shortName != "" {
 			fullPath := ResolveFullImportPath(pkg, shortName)
 
@@ -308,13 +338,13 @@ func CollectImports(pkg *packages.Package, packets []Packet) []string {
 		}
 
 		for _, sf := range field.StructFields {
-			collectField(sf)
+			collectField(sf, flow)
 		}
 	}
 
 	for _, pkt := range packets {
 		for _, field := range pkt.Fields {
-			collectField(field)
+			collectField(field, pkt.Flow)
 		}
 	}
 
