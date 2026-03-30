@@ -41,6 +41,9 @@ type Field struct {
 
 	IsSlice       bool
 	SliceElemKind string
+
+	IsStruct     bool
+	StructFields []Field
 }
 
 type Packet struct {
@@ -55,33 +58,6 @@ type Packet struct {
 func (p Packet) FuncName() string {
 	return strings.TrimSuffix(p.Name, "Packet")
 }
-
-//// WriteArg generates the code for the value being sent to the buffer.
-//// It automatically applies a cast from the Strong Type to the Primitive Type.
-//func (f Field) WriteArg(target string) string {
-//	// If no Strong Type is defined, we use the field directly (e.g., p.Age).
-//	if f.KindStrong == "" {
-//		return target
-//	}
-//
-//	// If a Strong Type exists, we "strip" it back to its primitive Kind.
-//	// Example: Kind="uint32", KindStrong="character.ID" -> returns "uint32(p.ID)"
-//	// Example: Kind="string", KindStrong="character.Name" -> returns "string(p.Name)"
-//	return f.Kind + "(" + target + ")"
-//}
-//
-//// ReadAssign generates the assignment logic for the Decode function.
-//// It "wraps" the raw value 'v' from the buffer into your Strong Type.
-//func (f Field) ReadAssign(target string) string {
-//	// If no Strong Type is defined, we perform a direct assignment (e.g., p.Age = v).
-//	if f.KindStrong == "" {
-//		return target + " = v"
-//	}
-//
-//	// If a Strong Type exists, we cast the raw value 'v' into it.
-//	// Example: KindStrong="character.ID" -> returns "p.ID = character.ID(v)"
-//	return target + " = " + f.KindStrong + "(v)"
-//}
 
 // WriteMethod returns the PacketWriter method name for this field's primitive kind.
 func (f Field) WriteMethod() string {
@@ -120,7 +96,7 @@ func (f Field) ReadMethod() string {
 // For numeric strong types it casts back to the primitive: uint8(p.Reason).
 // For strings and primitive-typed fields it passes the value directly.
 func (f Field) WriteArg(target string) string {
-	if f.KindStrong == "" || f.Kind == "string" || f.Kind == "bool" {
+	if f.KindStrong == "" || f.Kind == "bool" {
 		return target
 	}
 
@@ -184,12 +160,12 @@ func main() {
 	logs.Infof("Processing '%s' -> '%s%s'", *inFile, *outDir, *goFile)
 	logs.Infof("Processing '%s' -> '%s%s'", *inFile, *outDir, *gdFile)
 
-	pkg, packets, err := ParsePackets(*inFile)
+	rootPkg, _, packets, err := ParsePackets(*inFile)
 	if err != nil {
 		logs.Fatalf("Failed to parse packets '%v'", err)
 	}
 
-	importPaths := CollectImports(pkg, packets)
+	importPaths := CollectImports(rootPkg, packets)
 
 	if err := GenerateGoFile(*outDir, *goFile, packets, importPaths); err != nil {
 		logs.Fatalf("Failed to generate Go file: %v", err)
@@ -203,21 +179,25 @@ func main() {
 	time.Sleep(1 * time.Millisecond)
 }
 
-func ParsePackets(inFile string) (*packages.Package, []Packet, error) {
-	pkg, err := LoadPackage(inFile)
+// ParsePackets loads all packages reachable from inFile and returns
+// the root package, the full package map, and the parsed packet list.
+func ParsePackets(inFile string) (*packages.Package, map[string]*packages.Package, []Packet, error) {
+	rootPkg, pkgMap, err := LoadPackage(inFile)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
+	packets := CollectPackets(rootPkg, pkgMap)
 
-	packets := CollectPackets(pkg)
-
-	return pkg, packets, nil
+	return rootPkg, pkgMap, packets, nil
 }
 
-func LoadPackage(inFile string) (*packages.Package, error) {
+// LoadPackages loads the package containing inFile together with all of its
+// transitive dependencies (NeedDeps). It returns a flat map keyed by import
+// path and the root package (the one whose directory matches inFile).
+func LoadPackage(inFile string) (*packages.Package, map[string]*packages.Package, error) { // CHECK THISSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS
 	absIn, err := filepath.Abs(inFile)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	dir := filepath.Dir(absIn)
 
@@ -227,25 +207,52 @@ func LoadPackage(inFile string) (*packages.Package, error) {
 			packages.NeedSyntax |
 			packages.NeedTypes |
 			packages.NeedTypesInfo |
-			packages.NeedImports,
+			packages.NeedImports |
+			packages.NeedDeps,
 		Dir: dir,
 	}
 
 	pkgs, err := packages.Load(cfg, ".")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if packages.PrintErrors(pkgs) > 0 {
-		return nil, fmt.Errorf("Packages loaded with errors.")
+		return nil, nil, fmt.Errorf("Packages loaded with errors.")
 	}
 	if len(pkgs) == 0 {
-		return nil, fmt.Errorf("No Packages loaded from '%s'", dir)
+		return nil, nil, fmt.Errorf("No Packages loaded from '%s'", dir)
 	}
 
-	return pkgs[0], nil
+	pkgMap := make(map[string]*packages.Package)
+	var walk func(*packages.Package)
+	walk = func(p *packages.Package) {
+		if _, exists := pkgMap[p.PkgPath]; exists {
+			return
+		}
+		pkgMap[p.PkgPath] = p
+		for _, imp := range p.Imports {
+			walk(imp)
+		}
+	}
+	for _, pkg := range pkgs {
+		walk(pkg)
+	}
+
+	var root *packages.Package
+	for _, pkg := range pkgs {
+		if len(pkg.GoFiles) > 0 && filepath.Dir(pkg.GoFiles[0]) == dir {
+			root = pkg
+			break
+		}
+	}
+	if root == nil {
+		root = pkgs[0]
+	}
+
+	return root, pkgMap, nil
 }
 
-func CollectPackets(pkg *packages.Package) []Packet {
+func CollectPackets(pkg *packages.Package, pkgMap map[string]*packages.Package) []Packet {
 	var packets []Packet
 
 	for _, file := range pkg.Syntax {
@@ -269,9 +276,8 @@ func CollectPackets(pkg *packages.Package) []Packet {
 				if !ok {
 					continue
 				}
-
 				packet := ParseDirectives(typeSpec.Name.Name, directive)
-				packet.Fields = ParseFields(pkg, structType)
+				packet.Fields = ParseFields(pkg, pkgMap, structType)
 
 				packets = append(packets, packet)
 			}
@@ -281,22 +287,34 @@ func CollectPackets(pkg *packages.Package) []Packet {
 	return packets
 }
 
+// CollectImports walks all packet fields (recursing into StructFields) and
+// resolves the full import path for every referenced external package.
 func CollectImports(pkg *packages.Package, packets []Packet) []string {
 	uniquePaths := make(map[string]bool)
 	var result []string
 
-	for _, pkt := range packets {
-		for _, field := range pkt.Fields {
-			shortName := field.GetPackageName()
-			if shortName == "" {
-				continue
-			}
+	var collectField func(Field)
+	collectField = func(field Field) {
+		shortName := field.GetPackageName()
+
+		if shortName != "" {
 			fullPath := ResolveFullImportPath(pkg, shortName)
+
 			if fullPath != "" && !uniquePaths[fullPath] {
 				uniquePaths[fullPath] = true
 
 				result = append(result, fullPath)
 			}
+		}
+
+		for _, sf := range field.StructFields {
+			collectField(sf)
+		}
+	}
+
+	for _, pkt := range packets {
+		for _, field := range pkt.Fields {
+			collectField(field)
 		}
 	}
 
@@ -359,7 +377,10 @@ func ParseDirectives(name, directive string) Packet {
 	return pkt
 }
 
-func ParseFields(pkg *packages.Package, structType *ast.StructType) []Field {
+// ParseFields parses a struct's field list.  pkgMap is needed so that fields
+// whose type is itself a struct (e.g. []character.Character) can be resolved
+// recursively via FindStructFields.
+func ParseFields(pkg *packages.Package, pkgMap map[string]*packages.Package, structType *ast.StructType) []Field {
 	var fields []Field
 
 	for _, f := range structType.Fields.List {
@@ -374,17 +395,26 @@ func ParseFields(pkg *packages.Package, structType *ast.StructType) []Field {
 			}
 		}
 
-		kind, strong, bufferMethod := resolveTypeInfo(pkg, targetExpr)
+		kind, strong, isStruct := resolveTypeInfo(pkg, targetExpr)
+
+		var structFields []Field
+		if isStruct {
+			typeStr := strong
+			if typeStr == "" {
+				typeStr = kind
+			}
+			structFields = FindStructFields(pkgMap, typeStr)
+		}
 
 		for _, nameIdent := range f.Names {
 			field := Field{
 				Name:         nameIdent.Name,
 				Kind:         kind,
 				KindStrong:   strong,
-				BufferMethod: bufferMethod,
 				IsSlice:      isSlice,
+				IsStruct:     isStruct,
+				StructFields: structFields,
 			}
-
 			if isSlice {
 				field.SliceElemKind = kind
 			}
@@ -394,6 +424,44 @@ func ParseFields(pkg *packages.Package, structType *ast.StructType) []Field {
 	}
 
 	return fields
+}
+
+// FindStructFields looks up a named struct type (e.g. "character.Character")
+// across all loaded packages and returns its parsed fields.
+func FindStructFields(pkgMap map[string]*packages.Package, strongType string) []Field {
+	parts := strings.SplitN(strongType, ".", 2)
+	if len(parts) != 2 {
+		return nil
+	}
+	pkgShort, typeName := parts[0], parts[1]
+
+	for _, p := range pkgMap {
+		if p.Name != pkgShort {
+			continue
+		}
+		for _, file := range p.Syntax {
+			for _, decl := range file.Decls {
+				genDecl, ok := decl.(*ast.GenDecl)
+				if !ok {
+					continue
+				}
+				for _, spec := range genDecl.Specs {
+					ts, ok := spec.(*ast.TypeSpec)
+					if !ok || ts.Name.Name != typeName {
+						continue
+					}
+					st, ok := ts.Type.(*ast.StructType)
+					if !ok {
+						continue
+					}
+					return ParseFields(p, pkgMap, st)
+				}
+			}
+		}
+	}
+
+	logs.Warnf("FindStructFields: type %q not found in loaded packages", strongType)
+	return nil
 }
 
 func parseType(e ast.Expr) (kind string, isSlice bool) {
@@ -414,8 +482,12 @@ func parseType(e ast.Expr) (kind string, isSlice bool) {
 	}
 }
 
-// resolveTypeInfo breaks down the AST expression into our 3 categories.
-func resolveTypeInfo(pkg *packages.Package, expr ast.Expr) (kind, strong, bufferMethod string) {
+// resolveTypeInfo breaks an AST expression into (kind, strong, isStruct).
+//
+//   - Primitive field  uint16          → ("uint16",  "",                false)
+//   - Strong-typed     character.Level → ("uint8",   "character.Level", false)
+//   - Struct           character.Character → ("struct", "character.Character", true)
+func resolveTypeInfo(pkg *packages.Package, expr ast.Expr) (kind, strong string, isStruct bool) {
 	// Get the actual string representation from AST (e.g., "character.ID" or "uint32")
 	astName, _ := parseType(expr)
 
@@ -423,45 +495,52 @@ func resolveTypeInfo(pkg *packages.Package, expr ast.Expr) (kind, strong, buffer
 	// This handles: type ID uint32 -> underlying is uint32
 	tv, ok := pkg.TypesInfo.Types[expr]
 	if !ok {
-		return astName, "", "Unknown"
+		return astName, "", false
 	}
 
 	underlying := tv.Type.Underlying().String()
-	// Map the underlying type to our Raw buffer name
-	bufferMethodName, exists := goTypeToBufferMethod[underlying]
-	if !exists {
-		bufferMethodName = "Unknown"
+
+	// Struct types — caller resolves fields via FindStructFields.
+	if strings.HasPrefix(underlying, "struct{") {
+		return "struct", astName, true
+	}
+
+	if _, exists := goTypeToBufferMethod[underlying]; !exists {
+		logs.Warnf("Unsupported Underlying Type '%q' for '%q' field will be skipped", underlying, astName)
+		return underlying, astName, false
 	}
 
 	// Strong type: e.g. astName="character.Level", underlying="uint8"
 	if astName != underlying {
-		return underlying, astName, bufferMethodName
+		return underlying, astName, false
 	}
 
 	// Primitive type
-	return underlying, "", bufferMethodName
+	return underlying, "", false
 }
 
+// ResolveFullImportPath finds the full import path for a short package name
+// by scanning the import declarations in every syntax file of pkg.
 func ResolveFullImportPath(pkg *packages.Package, shortName string) string {
 	for _, file := range pkg.Syntax {
 		for _, imp := range file.Imports {
-			if imp.Path == nil {
+			if imp == nil || imp.Path == nil {
 				continue
 			}
 			fullPath := strings.Trim(imp.Path.Value, `"`)
 
 			// Explicit alias: import foo "pkg/path/bar"
-			if imp.Path != nil && imp.Name.Name == shortName {
-				return fullPath
+			if imp.Name != nil && imp.Name.Name != "" && imp.Name.Name != "_" && imp.Name.Name != "." {
+				if imp.Name.Name == shortName {
+					return fullPath
+				}
+				continue
 			}
 
 			// No alias: match last path segment against shortName
-			if imp.Name == nil {
-				parts := strings.Split(fullPath, "/")
-				if parts[len(parts)-1] == shortName {
-					return fullPath
-
-				}
+			parts := strings.Split(fullPath, "/")
+			if len(parts) > 0 && parts[len(parts)-1] == shortName {
+				return fullPath
 			}
 		}
 	}
@@ -510,6 +589,17 @@ func GenerateGodotFile(outDir, fileName string, packets []Packet) error {
 	return tmpl.Execute(f, packets)
 }
 
+// Struct fields are inlined field-by-field using a template variable ($f) to
+// carry the outer field name into the inner range over StructFields.
+//
+// Encode slice-of-struct example (Characters []character.Character):
+//
+//	w.WriteUint16(uint16(len(p.Characters)))
+//	for _, v := range p.Characters {
+//	    w.WriteUint8String(v.Name)
+//	    w.WriteUint32(uint32(v.ID))
+//	    ...
+//	}
 const goTemplate = `package protocol
 {{if .Imports}}
 import (
@@ -524,16 +614,27 @@ import (
 func Encode{{.FuncName}}(buf []byte, p *{{.Name}}) []byte {
 	w := NewWriter(buf, Opcode{{.Opcode}}, {{.FuncName}}.Action(), StatusOK)
 	{{- range .Fields}}
+	{{- $f := .}}
 	{{- if .IsSlice}}
 	w.WriteUint16(uint16(len(p.{{.Name}})))
 	for _, v := range p.{{.Name}} {
+		{{- if .IsStruct}}
+		{{- range .StructFields}}
+		w.{{.WriteMethod}}({{.WriteArg (printf "v.%s" .Name)}})
+		{{- end}}
+		{{- else}}
 		w.{{.WriteMethod}}({{.WriteArg "v"}})
+		{{- end}}
 	}
+	{{- else if .IsStruct}}
+	{{- range .StructFields}}
+	w.{{.WriteMethod}}({{.WriteArg (printf "p.%s.%s" $f.Name .Name)}})
+	{{- end}}
 	{{- else}}
 	w.{{.WriteMethod}}({{.WriteArg (printf "p.%s" .Name)}})
 	{{- end}}
 	{{- end}}
-
+ 
 	return w.Bytes()
 }
 {{end}}
@@ -542,22 +643,46 @@ func Encode{{.FuncName}}(buf []byte, p *{{.Name}}) []byte {
 func Decode{{.FuncName}}(payload []byte, p *{{.Name}}) error {
 	r := NewReader(payload)
 	{{- range .Fields}}
-	{
-		{{- if .IsSlice}}
+	{{- $f := .}}
+	{{- if .IsSlice}}
+	{	
+		if err != nil { return err }
 		count, err := r.ReadUint16()
 		if err != nil { return err }
 		p.{{.Name}} = make([]{{if .KindStrong}}{{.KindStrong}}{{else}}{{.Kind}}{{end}}, count)
 		for i := range p.{{.Name}} {
-			v, err := r.{{.ReadMethod}}()
-			if err != nil { return err }
-			{{.ReadAssign (printf "p.%s[i]" .Name)}}
+			{{- if .IsStruct}}
+			{{- range .StructFields}}
+			{
+				v, err := r.{{.ReadMethod}}()
+				if err != nil { return err }
+				{{.ReadAssign (printf "p.%s[i].%s" $f.Name .Name)}}
+			}
+			{{- end}}
+			{{- else}}
+			{
+				v, err := r.{{.ReadMethod}}()
+				if err != nil { return err }
+				{{.ReadAssign (printf "p.%s[i]" $f.Name)}}
+			}
+			{{- end}}
 		}
-		{{- else}}
+	}
+	{{- else if .IsStruct}}
+	{{- range .StructFields}}
+	{
+		v, err := r.{{.ReadMethod}}()
+		if err != nil { return err }
+		{{.ReadAssign (printf "p.%s.%s" $f.Name .Name)}}
+	}
+	{{- end}}
+	{{- else}}
+	{
 		v, err := r.{{.ReadMethod}}()
 		if err != nil { return err }
 		{{.ReadAssign (printf "p.%s" .Name)}}
-		{{- end}}
 	}
+	{{- end}}
 	{{- end}}
 
 	return nil
