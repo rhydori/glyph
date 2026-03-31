@@ -398,7 +398,7 @@ func CollectImports(pkg *packages.Package, packets []Packet) []string {
 		}
 
 		shortName := field.GetPackageName()
-		if shortName != "" {
+		if shortName != "" && needsDeeps(flow) {
 			fullPath := ResolveFullImportPath(pkg, shortName)
 
 			if fullPath != "" && !uniquePaths[fullPath] {
