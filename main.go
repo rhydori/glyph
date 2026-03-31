@@ -65,35 +65,56 @@ func (p Packet) FuncName() string {
 
 // WriteMethod returns the PacketWriter method name for this field's primitive kind.
 func (f Field) WriteMethod() string {
-	m := map[string]string{
-		"uint8":  "WriteUint8",
-		"uint16": "WriteUint16",
-		"uint32": "WriteUint32",
-		"uint64": "WriteUint64",
-		"string": "WriteUint8String",
-		"bool":   "WriteBool",
-	}
-	if v, ok := m[f.Kind]; ok {
-		return v
-	}
+	switch f.Kind {
+	case "string":
+		switch f.CountKind {
+		case "u8", "uint8":
+			return "WriteUint8String"
+		case "u16", "uint16":
+			return "WriteUint16String"
+		default:
+			return "WriteUnknownString_" + f.CountKind
+		}
+	case "uint8":
+		return "WriteUint8"
+	case "uint16":
+		return "WriteUint16"
+	case "uint32":
+		return "WriteUint32"
+	case "uint64":
+		return "WriteUint64"
+	case "bool":
+		return "WriteBool"
+	default:
+		return "WriteUnknown_" + f.Kind
 
-	return "WriteUnknown_" + f.Kind
+	}
 }
 
 func (f Field) ReadMethod() string {
-	m := map[string]string{
-		"uint8":  "ReadUint8",
-		"uint16": "ReadUint16",
-		"uint32": "ReadUint32",
-		"uint64": "ReadUint64",
-		"string": "ReadUint8String",
-		"bool":   "ReadBool",
+	switch f.Kind {
+	case "string":
+		switch f.CountKind {
+		case "u8", "uint8":
+			return "ReadUint8String"
+		case "u16", "uint16":
+			return "ReadUint16String"
+		default:
+			return "ReadUnknownString_" + f.CountKind
+		}
+	case "uint8":
+		return "ReadUint8"
+	case "uint16":
+		return "ReadUint16"
+	case "uint32":
+		return "ReadUint32"
+	case "uint64":
+		return "ReadUint64"
+	case "bool":
+		return "ReadBool"
+	default:
+		return "ReadUnknown_" + f.Kind
 	}
-	if v, ok := m[f.Kind]; ok {
-		return v
-	}
-
-	return "ReadUnknown_" + f.Kind
 }
 
 func (f Field) CountWriteMethod() string {
@@ -107,7 +128,8 @@ func (f Field) CountWriteMethod() string {
 	case "u64", "uint64":
 		return "WriteUint64"
 	default:
-		return "WriteUint8"
+		return "CountWriteUnknown_" + f.CountKind
+
 	}
 }
 
@@ -122,7 +144,7 @@ func (f Field) CountReadMethod() string {
 	case "u64", "uint64":
 		return "ReadUint64"
 	default:
-		return "ReadUint8"
+		return "CountReadUnknown_" + f.CountKind
 	}
 }
 
@@ -137,7 +159,7 @@ func (f Field) CountCastType() string {
 	case "u64", "uint64":
 		return "uint64"
 	default:
-		return "uint8"
+		return "CountCastUnknown_" + f.CountKind
 	}
 }
 
