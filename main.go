@@ -17,10 +17,10 @@ type Generated struct {
 }
 
 func main() {
-	inDir := flag.String("in", "../../server/gameserver/internal/protocol/", "")
+	inDir := flag.String("in", "", "")
 	inFile := flag.String("file", "packets.go", "")
-	goOutDir := flag.String("goout", "../../server/gameserver/internal/protocol/", "")
-	gdOutDir := flag.String("gdout", "../../client/scripts/backend/game/protocol/", "")
+	goOutDir := flag.String("goout", "./generated/", "")
+	gdOutDir := flag.String("gdout", "./generated/", "")
 	goFile := flag.String("go", "codec.go", "")
 	gdFile := flag.String("gd", "codec.gd", "")
 	flag.Parse()
@@ -50,11 +50,10 @@ func main() {
 	goOutFilePath := filepath.Join(*goOutDir, *goFile)
 	gdOutFilePath := filepath.Join(*gdOutDir, *gdFile)
 
-	logs.Infof("Processing '%s' -> '%s'", inFilePath, goOutFilePath)
-	logs.Infof("Processing '%s' -> '%s'", inFilePath, gdOutFilePath)
-
 	// Remove the previously generated codec so stale code doesn't break package loading.
 	os.Remove(goOutFilePath)
+
+	logs.Info("Starting...")
 
 	rootPkg, _, packets, err := ParsePackets(inFilePath)
 	if err != nil {
@@ -63,10 +62,12 @@ func main() {
 
 	importPaths := CollectImports(rootPkg, packets)
 
+	logs.Infof("Generating '%s' -> '%s'", inFilePath, goOutFilePath)
 	if err := GenerateGoFile(*goOutDir, *goFile, packets, importPaths); err != nil {
 		logs.Fatalf("Failed to generate Go file: %v", err)
 	}
 
+	logs.Infof("Processing '%s' -> '%s'", inFilePath, gdOutFilePath)
 	if err := GenerateGodotFile(*gdOutDir, *gdFile, packets); err != nil {
 		logs.Fatalf("Failed to generate Godot file: %v", err)
 	}
