@@ -94,7 +94,7 @@ func LoadPackage(inFile string) (*packages.Package, map[string]*packages.Package
 }
 
 // CollectPackets walks the root package's AST and returns all structs
-// annotated with a GenProtocol directive.
+// annotated with a Glyph directive.
 func CollectPackets(pkg *packages.Package, pkgMap map[string]*packages.Package) []Packet {
 	var packets []Packet
 
@@ -102,11 +102,6 @@ func CollectPackets(pkg *packages.Package, pkgMap map[string]*packages.Package) 
 		for _, decl := range file.Decls {
 			genDecl, ok := decl.(*ast.GenDecl)
 			if !ok || genDecl.Doc == nil {
-				continue
-			}
-
-			directive := GetGenProtocolDirective(genDecl.Doc)
-			if directive == "" {
 				continue
 			}
 
@@ -119,7 +114,11 @@ func CollectPackets(pkg *packages.Package, pkgMap map[string]*packages.Package) 
 				if !ok {
 					continue
 				}
-				packet := ParseDirectives(typeSpec.Name.Name, directive)
+				packet, ok := ParseDirectives(typeSpec.Name.Name, genDecl.Doc)
+				if !ok {
+					continue
+				}
+
 				packet.Fields = ParseFields(pkg, pkgMap, structType)
 				packets = append(packets, packet)
 			}
@@ -190,44 +189,72 @@ func CollectSharedStructs(packets []Packet) []SharedStruct {
 	return result
 }
 
-// GetGenProtocolDirective returns the value after "GenProtocol:" in a doc comment, or "".
-func GetGenProtocolDirective(doc *ast.CommentGroup) string {
-	for _, comment := range doc.List {
-		text := strings.TrimSpace(strings.TrimPrefix(comment.Text, "//"))
-		if strings.HasPrefix(text, "GenProtocol:") {
-			return strings.TrimPrefix(text, "GenProtocol:")
+// ParseDirectives builds a Packet from its name and the raw Glyph directive string.
+func ParseDirectives(name string, doc *ast.CommentGroup) (Packet, bool) {
+	if doc == nil {
+		return Packet{}, false
+	}
+
+	for _, c := range doc.List {
+		text := strings.TrimSpace(strings.TrimPrefix(c.Text, "//"))
+
+		if !strings.HasPrefix(text, "%Glyph") {
+			continue
+		}
+
+		text = strings.ReplaceAll(text, "->", " ")
+		text = strings.ReplaceAll(text, "--", " ")
+		text = strings.Join(strings.Fields(text), " ")
+
+		var flow, opcode, action string
+
+		for part := range strings.FieldsSeq(text) {
+			keyValue := strings.SplitN(part, ":", 2)
+			if len(keyValue) != 2 {
+				continue
+			}
+
+			key := strings.ToLower(keyValue[0])
+			value := keyValue[1]
+
+			switch key {
+			case "flow":
+				flow = value
+			case "opcode":
+				opcode = value
+			case "action":
+				action = value
+			}
+		}
+
+		if flow == "" || opcode == "" || action == "" {
+			return Packet{}, false
+		}
+
+		flowEnum, ok := flowByName[strings.ToLower(flow)]
+		if !ok {
+			return Packet{}, false
+		}
+
+		return Packet{
+			Name:   name,
+			Flow:   flowEnum,
+			Opcode: opcode,
+			Action: action,
+		}, true
+	}
+
+	return Packet{}, false
+}
+
+func ExtractKeyValue(text, key string) string {
+	prefix := key + ":"
+	for part := range strings.FieldsSeq(text) {
+		if after, ok := strings.CutPrefix(part, prefix); ok {
+			return after
 		}
 	}
 	return ""
-}
-
-// ParseDirectives builds a Packet from its name and the raw GenProtocol directive string.
-func ParseDirectives(name, directive string) Packet {
-	pkt := Packet{Name: name}
-
-	parts := strings.Fields(directive)
-	if len(parts) == 0 {
-		return pkt
-	}
-
-	if flow, ok := flowByName[strings.ToLower(parts[0])]; ok {
-		pkt.Flow = flow
-	}
-
-	for _, part := range parts[1:] {
-		keyValue := strings.SplitN(part, ":", 2)
-		if len(keyValue) != 2 {
-			continue
-		}
-		switch strings.ToLower(keyValue[0]) {
-		case "opcode":
-			pkt.Opcode = keyValue[1]
-		case "action":
-			pkt.Action = keyValue[1]
-		}
-	}
-
-	return pkt
 }
 
 // ParseFields parses a struct's field list into Fields.

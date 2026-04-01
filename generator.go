@@ -179,9 +179,13 @@ func toGdWrite(f Field, varName string) string {
 	}
 }
 
-// toGdParam returns the GDScript parameter declaration for an encode function argument.
-func toGdParam(f Field) string {
-	return toSnake(f.Name) + ":" + gdType(f.Kind)
+// toGdParams returns the full GDScript parameter list for an encode function.
+func toGdParams(fields []Field) string {
+	parts := make([]string, len(fields))
+	for i, f := range fields {
+		parts[i] = toSnake(f.Name) + ":" + gdType(f.Kind)
+	}
+	return strings.Join(parts, ", ")
 }
 
 var funcMap = template.FuncMap{
@@ -193,5 +197,5 @@ var funcMap = template.FuncMap{
 	"to_gd_write":     toGdWrite,
 	"to_gd_count_get": gdCountGet,
 	"to_gd_count_put": gdCountPut,
-	"to_gd_param":     toGdParam,
+	"to_gd_params":    toGdParams,
 }

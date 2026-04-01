@@ -94,8 +94,6 @@ func (p Packet) FuncName() string {
 	return strings.TrimSuffix(p.Name, "Packet")
 }
 
-// ---
-
 var kindToWriteMethod = map[string]string{
 	"uint8":  "WriteUint8",
 	"uint16": "WriteUint16",

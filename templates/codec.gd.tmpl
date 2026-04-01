@@ -62,7 +62,7 @@ class {{.Name}}:
 {{- end}}
 
 {{- if .Flow.ClientEncodes}}
-	static func encode({{range $i, $f := .Fields}}{{if $i}}, {{end}}{{$f | to_gd_param}}{{end}}) -> PackedByteArray:
+	static func encode({{.Fields | to_gd_params}})-> PackedByteArray:
 		var stream := Packet.encode(Opcode.{{.Opcode | to_upper}}, {{to_gd_action .Opcode .Action}})
 		{{- range .Fields}}
 		{{- if .IsSlice}}
@@ -95,7 +95,7 @@ class {{.Name}}:
 		for i in range(count_{{.Name | to_snake}}):
 			packet.{{.Name | to_snake}}[i] = Helper._decode_{{.StructName | to_snake}}(stream)
 		{{- else}}
-		
+
 		for i in range(count_{{.Name | to_snake}}):
 			packet.{{.Name | to_snake}}[i] = {{. | to_gd_read}}
 		{{- end}}
