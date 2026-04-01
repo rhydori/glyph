@@ -1,4 +1,4 @@
-module github.com/rhydori/lostpath/server/tools/genprotocol
+module github.com/rhydori/glyph
 
 go 1.26.1
 
