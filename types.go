@@ -241,5 +241,8 @@ func (f Field) IsClientOnly() bool { return f.FieldFlow == "client" }
 func (f Field) IsServerOnly() bool { return f.FieldFlow == "server" }
 func (f Field) IsShared() bool     { return f.FieldFlow == "" }
 
-func (f Field) UsedInEncode() bool { return f.IsShared() || f.IsClientOnly() }
-func (f Field) UsedInDecode() bool { return f.IsShared() || f.IsServerOnly() }
+func (f Field) UsedInServerEncode() bool { return f.IsShared() || f.IsServerOnly() }
+func (f Field) UsedInServerDecode() bool { return f.IsShared() || f.IsClientOnly() }
+
+func (f Field) UsedInClientEncode() bool { return f.IsShared() || f.IsClientOnly() }
+func (f Field) UsedInClientDecode() bool { return f.IsShared() || f.IsServerOnly() }

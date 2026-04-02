@@ -50,7 +50,7 @@ class Helper:
 class {{.Name}}:
 
 {{- if .Flow.ClientDecodes}}
-{{- range filter_decode_fields .Fields}}
+{{- range filter_client_decode_fields .Fields}}
 	{{- if .IsSlice}}
 	var {{.Name | to_snake}}:Array[{{if .IsStruct}}{{.StructName}}{{else}}{{.Kind | to_gd_type}}{{end}}]
 	{{- else}}
@@ -62,13 +62,13 @@ class {{.Name}}:
 {{- if .Flow.ClientEncodes}}
 	static func encode({{.Fields | to_gd_params}})-> PackedByteArray:
 		var stream := Packet.encode(Opcode.{{.Opcode | to_upper}}, {{to_gd_action .Opcode .Action}})
-		{{- range filter_encode_fields .Fields}}
+		{{- range filter_client_encode_fields .Fields}}
 		{{- if .IsSlice}}
-		stream.{{.CountKind | to_gd_count_put}}({{.Name | to_snake}}.size())
-		for value in {{.Name | to_snake}}:
+		stream.{{.CountKind | to_gd_count_put}}({{.Name | to_gd_param_name}}.size())
+		for value in {{.Name | to_gd_param_name}}:
 			{{to_gd_write . "value"}}
 		{{- else}}
-		{{to_gd_write . (.Name | to_snake)}}
+		{{to_gd_write . (.Name | to_gd_param_name)}}
 		{{- end}}
 		{{- end}}
 		return stream.data_array
@@ -83,7 +83,7 @@ class {{.Name}}:
 		var packet := {{.Name}}.new()
 		var stream := Helper.make_stream(payload)
 
-		{{- range filter_decode_fields .Fields}}
+		{{- range filter_client_decode_fields .Fields}}
 		{{- $f := .}}
 		{{- if .IsSlice}}
 		var count_{{.Name | to_snake}} := stream.{{.CountKind | to_gd_count_get}}

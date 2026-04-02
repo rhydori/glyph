@@ -194,50 +194,71 @@ func toGdWrite(f Field, varName string) string {
 func toGdParams(fields []Field) string {
 	var parts []string
 	for _, f := range fields {
-		if f.UsedInEncode() {
-			parts = append(parts, toSnake(f.Name)+":"+gdType(f.Kind))
+		if f.UsedInClientEncode() {
+			parts = append(parts, gdParamName(f.Name)+":"+gdType(f.Kind))
 		}
 	}
 
 	return strings.Join(parts, ", ")
 }
 
-// filterEncodeFields returns only the fields that participate in encoding:
-// fields with no flow tag (shared) and fields tagged flow:"client".
-func filterEncodeFields(fields []Field) []Field {
+func gdParamName(name string) string {
+	return toSnake(name) + "_arg"
+}
+
+func filterServerEncodeFields(fields []Field) []Field {
 	var result []Field
 	for _, f := range fields {
-		if f.UsedInEncode() {
+		if f.UsedInServerEncode() {
 			result = append(result, f)
 		}
 	}
-
 	return result
 }
 
-// filterDecodeFields returns only the fields that participate in decoding:
-// fields with no flow tag (shared) and fields tagged flow:"server".
-func filterDecodeFields(fields []Field) []Field {
+func filterServerDecodeFields(fields []Field) []Field {
 	var result []Field
 	for _, f := range fields {
-		if f.UsedInDecode() {
+		if f.UsedInServerDecode() {
 			result = append(result, f)
 		}
 	}
+	return result
+}
 
+func filterClientEncodeFields(fields []Field) []Field {
+	var result []Field
+	for _, f := range fields {
+		if f.UsedInClientEncode() {
+			result = append(result, f)
+		}
+	}
+	return result
+}
+
+func filterClientDecodeFields(fields []Field) []Field {
+	var result []Field
+	for _, f := range fields {
+		if f.UsedInClientDecode() {
+			result = append(result, f)
+		}
+	}
 	return result
 }
 
 var funcMap = template.FuncMap{
-	"to_snake":             toSnake,
-	"to_upper":             strings.ToUpper,
-	"to_gd_type":           gdType,
-	"to_gd_action":         toGdAction,
-	"to_gd_read":           toGdRead,
-	"to_gd_write":          toGdWrite,
-	"to_gd_count_get":      gdCountGet,
-	"to_gd_count_put":      gdCountPut,
-	"to_gd_params":         toGdParams,
-	"filter_encode_fields": filterEncodeFields,
-	"filter_decode_fields": filterDecodeFields,
+	"to_snake":                    toSnake,
+	"to_upper":                    strings.ToUpper,
+	"to_gd_type":                  gdType,
+	"to_gd_action":                toGdAction,
+	"to_gd_read":                  toGdRead,
+	"to_gd_write":                 toGdWrite,
+	"to_gd_count_get":             gdCountGet,
+	"to_gd_count_put":             gdCountPut,
+	"to_gd_params":                toGdParams,
+	"to_gd_param_name":            gdParamName,
+	"filter_server_encode_fields": filterServerEncodeFields,
+	"filter_server_decode_fields": filterServerDecodeFields,
+	"filter_client_encode_fields": filterClientEncodeFields,
+	"filter_client_decode_fields": filterClientDecodeFields,
 }

@@ -134,35 +134,38 @@ func CollectImports(pkg *packages.Package, packets []Packet) []string {
 	uniquePaths := make(map[string]bool)
 	var result []string
 
-	var collectField func(Field, Flow)
-	collectField = func(field Field, flow Flow) {
-		if field.IsStruct && !flow.ServerDecodes() {
-			for _, sf := range field.StructFields {
-				collectField(sf, flow)
-			}
+	var collectField func(Field)
+	collectField = func(field Field) {
+		if !field.UsedInServerDecode() {
+			return
+		}
 
+		if field.IsStruct {
+			for _, sf := range field.StructFields {
+				collectField(sf)
+			}
 			return
 		}
 
 		shortName := field.GetPackageName()
-		if shortName != "" && flow.ServerDecodes() {
-			fullPath := ResolveFullImportPath(pkg, shortName)
-
-			if fullPath != "" && !uniquePaths[fullPath] {
-				uniquePaths[fullPath] = true
-
-				result = append(result, fullPath)
-			}
+		if shortName == "" {
+			return
 		}
 
-		for _, sf := range field.StructFields {
-			collectField(sf, flow)
+		fullPath := ResolveFullImportPath(pkg, shortName)
+		if fullPath != "" && !uniquePaths[fullPath] {
+			uniquePaths[fullPath] = true
+			result = append(result, fullPath)
 		}
 	}
 
 	for _, pkt := range packets {
+		if !pkt.Flow.ServerDecodes() {
+			continue
+		}
+
 		for _, field := range pkt.Fields {
-			collectField(field, pkt.Flow)
+			collectField(field)
 		}
 	}
 
