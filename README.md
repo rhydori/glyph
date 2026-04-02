@@ -1,4 +1,4 @@
-# GenProtocol
+# Glyph
 
 A custom binary serialization protocol that reads annotated Go structs and outputs ready-to-use encode/decode code for both the Go Server and the Godot Client (GDScript).
 
