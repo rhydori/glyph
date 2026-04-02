@@ -274,11 +274,19 @@ func ParseFields(pkg *packages.Package, pkgMap map[string]*packages.Package, str
 
 		kind, strong, isStruct := resolveTypeInfo(pkg, targetExpr)
 
-		countKind := "u8"
+		countKind := ""
+		if isSlice {
+			countKind = "u8"
+		}
+		fieldFlow := ""
 		if f.Tag != nil {
 			tag := strings.Trim(f.Tag.Value, "`")
-			if v := reflect.StructTag(tag).Get("count"); v != "" {
+			rt := reflect.StructTag(tag)
+			if v := rt.Get("count"); v != "" {
 				countKind = v
+			}
+			if v := rt.Get("flow"); v != "" {
+				fieldFlow = v
 			}
 		}
 
@@ -302,6 +310,7 @@ func ParseFields(pkg *packages.Package, pkgMap map[string]*packages.Package, str
 				IsStruct:     isStruct,
 				StructName:   structName,
 				StructFields: structFields,
+				FieldFlow:    fieldFlow,
 			}
 			if isSlice {
 				field.SliceElemKind = kind

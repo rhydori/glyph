@@ -61,6 +61,17 @@ func (r *PacketReader) ReadBool() (bool, error) {
 	return v != 0, err
 }
 
+// ReadRawString reads all remaining bytes as a UTF-8 string.
+// Use only when the string is the last field in the packet.
+func (r *PacketReader) ReadRawString() (string, error) {
+	if r.offset >= len(r.buf) {
+		return "", io.ErrUnexpectedEOF
+	}
+	s := string(r.buf[r.offset:])
+	r.offset = len(r.buf)
+	return s, nil
+}
+
 // ReadString reads a u8-length-prefixed UTF-8 string.
 // The returned string is a fresh allocation — safe to keep after the buffer
 // is returned to sync.Pool.

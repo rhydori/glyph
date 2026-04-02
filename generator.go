@@ -150,6 +150,9 @@ func toGdRead(f Field) string {
 	case "bool":
 		return "stream.get_u8() != 0"
 	case "string":
+		if f.CountKind == "" {
+			return "stream.get_utf8_string(stream.get_available_bytes())"
+		}
 		return "stream.get_utf8_string(stream." + gdCountGet(f.CountKind) + ")"
 	default:
 		return "# BUG: Unknown Kind " + f.Kind
@@ -161,6 +164,13 @@ func toGdWrite(f Field, varName string) string {
 	switch f.Kind {
 	case "string":
 		b := "buffer_" + varName
+		if f.CountKind == "" {
+			return fmt.Sprintf(
+				"var %s := %s.to_utf8_buffer()\n\t\tstream.put_data(%s)",
+				b, varName, b,
+			)
+
+		}
 		return fmt.Sprintf(
 			"var %s := %s.to_utf8_buffer()\n\t\tstream.%s(%s.size())\n\t\tstream.put_data(%s)",
 			b, varName, gdCountPut(f.CountKind), b, b,
@@ -180,22 +190,54 @@ func toGdWrite(f Field, varName string) string {
 }
 
 // toGdParams returns the full GDScript parameter list for an encode function.
+// including only fields that are used in encoding (shared and client-only fields).
 func toGdParams(fields []Field) string {
-	parts := make([]string, len(fields))
-	for i, f := range fields {
-		parts[i] = toSnake(f.Name) + ":" + gdType(f.Kind)
+	var parts []string
+	for _, f := range fields {
+		if f.UsedInEncode() {
+			parts = append(parts, toSnake(f.Name)+":"+gdType(f.Kind))
+		}
 	}
+
 	return strings.Join(parts, ", ")
 }
 
+// filterEncodeFields returns only the fields that participate in encoding:
+// fields with no flow tag (shared) and fields tagged flow:"client".
+func filterEncodeFields(fields []Field) []Field {
+	var result []Field
+	for _, f := range fields {
+		if f.UsedInEncode() {
+			result = append(result, f)
+		}
+	}
+
+	return result
+}
+
+// filterDecodeFields returns only the fields that participate in decoding:
+// fields with no flow tag (shared) and fields tagged flow:"server".
+func filterDecodeFields(fields []Field) []Field {
+	var result []Field
+	for _, f := range fields {
+		if f.UsedInDecode() {
+			result = append(result, f)
+		}
+	}
+
+	return result
+}
+
 var funcMap = template.FuncMap{
-	"to_snake":        toSnake,
-	"to_upper":        strings.ToUpper,
-	"to_gd_type":      gdType,
-	"to_gd_action":    toGdAction,
-	"to_gd_read":      toGdRead,
-	"to_gd_write":     toGdWrite,
-	"to_gd_count_get": gdCountGet,
-	"to_gd_count_put": gdCountPut,
-	"to_gd_params":    toGdParams,
+	"to_snake":             toSnake,
+	"to_upper":             strings.ToUpper,
+	"to_gd_type":           gdType,
+	"to_gd_action":         toGdAction,
+	"to_gd_read":           toGdRead,
+	"to_gd_write":          toGdWrite,
+	"to_gd_count_get":      gdCountGet,
+	"to_gd_count_put":      gdCountPut,
+	"to_gd_params":         toGdParams,
+	"filter_encode_fields": filterEncodeFields,
+	"filter_decode_fields": filterDecodeFields,
 }

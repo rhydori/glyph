@@ -74,6 +74,8 @@ type Field struct {
 	IsStruct     bool
 	StructName   string
 	StructFields []Field
+
+	FieldFlow string
 }
 
 type Packet struct {
@@ -155,6 +157,9 @@ func stringReadMethod(countKind string) string {
 
 func (f Field) WriteMethod() string {
 	if f.Kind == "string" {
+		if f.CountKind == "" {
+			return "WriteRawString"
+		}
 		return stringWriteMethod(f.CountKind)
 	}
 	if m, ok := kindToWriteMethod[f.Kind]; ok {
@@ -166,6 +171,9 @@ func (f Field) WriteMethod() string {
 
 func (f Field) ReadMethod() string {
 	if f.Kind == "string" {
+		if f.CountKind == "" {
+			return "ReadRawString"
+		}
 		return stringReadMethod(f.CountKind)
 	}
 	if m, ok := kindToReadMethod[f.Kind]; ok {
@@ -228,3 +236,10 @@ func (f Field) GetPackageName() string {
 
 	return strings.Split(f.KindStrong, ".")[0]
 }
+
+func (f Field) IsClientOnly() bool { return f.FieldFlow == "client" }
+func (f Field) IsServerOnly() bool { return f.FieldFlow == "server" }
+func (f Field) IsShared() bool     { return f.FieldFlow == "" }
+
+func (f Field) UsedInEncode() bool { return f.IsShared() || f.IsClientOnly() }
+func (f Field) UsedInDecode() bool { return f.IsShared() || f.IsServerOnly() }

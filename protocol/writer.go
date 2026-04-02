@@ -57,6 +57,17 @@ func (w *PacketWriter) WriteBool(v bool) *PacketWriter {
 		w.buf[w.offset] = 0
 	}
 	w.offset++
+
+	return w
+}
+
+// WriteRawString writes a UTF-8 string directly without a length prefix.
+// Use only when the string is the last field in the packet — the reader
+// will consume all remaining bytes to recover it.
+func (w *PacketWriter) WriteRawString(s string) *PacketWriter {
+	copy(w.buf[w.offset:], s)
+	w.offset += len(s)
+
 	return w
 }
 
@@ -87,6 +98,7 @@ func (w *PacketWriter) WriteUint16String(s string) *PacketWriter {
 	w.offset += 2
 	copy(w.buf[w.offset:], s)
 	w.offset += len(s)
+
 	return w
 }
 
