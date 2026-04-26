@@ -2,10 +2,20 @@ package protocol
 
 const HeaderSize = 3
 
-type Opcode uint8
-type Action uint8
-type Status uint8
+type PacketID uint16
+type Kind uint8
 
-func (v Opcode) Raw() uint8 { return uint8(v) }
-func (v Action) Raw() uint8 { return uint8(v) }
-func (v Status) Raw() uint8 { return uint8(v) }
+const (
+	AuthLogin PacketID = 0x0101
+
+	SystemNotice PacketID = 0x0203
+)
+
+const (
+	Request Kind = iota
+	OK
+	Error
+)
+
+func (v PacketID) Raw() uint16 { return uint16(v) }
+func (v Kind) Raw() uint8      { return uint8(v) }

@@ -129,11 +129,10 @@ func gdCountPut(kind string) string {
 	}
 }
 
-// toGdAction converts opcode + action into a GDScript enum reference.
-// e.g. ("Lobby", "LobbyCharList") -> "LobbyAction.CHAR_LIST"
-func toGdAction(opcode, action string) string {
-	suffix := strings.TrimPrefix(action, opcode)
-	return opcode + "Action." + camelToUpperSnake(suffix)
+// toGdPacketID converts a packet ID into a GDScript PacketID enum reference.
+// e.g. "LobbyCharList" -> "PacketID.LOBBY_CHAR_LIST"
+func toGdPacketID(id string) string {
+	return "PacketID." + camelToUpperSnake(id)
 }
 
 // toGdRead returns the GDScript expression to read a field from a StreamPeerBuffer.
@@ -250,7 +249,7 @@ var funcMap = template.FuncMap{
 	"to_snake":                    toSnake,
 	"to_upper":                    strings.ToUpper,
 	"to_gd_type":                  gdType,
-	"to_gd_action":                toGdAction,
+	"to_gd_packet_id":             toGdPacketID,
 	"to_gd_read":                  toGdRead,
 	"to_gd_write":                 toGdWrite,
 	"to_gd_count_get":             gdCountGet,

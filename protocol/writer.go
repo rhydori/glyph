@@ -12,13 +12,12 @@ type PacketWriter struct {
 	offset int
 }
 
-// NewWriter initialises the 3-byte header and positions the offset after it.
-func NewWriter(buf []byte, opcode Opcode, action Action, status Status) PacketWriter {
-	buf[0] = opcode.Raw()
-	buf[1] = action.Raw()
-	buf[2] = status.Raw()
+func NewWriter(buf []byte, id PacketID, kind Kind) PacketWriter {
+	w := PacketWriter{buf: buf, offset: 0}
+	w.WriteUint16(id.Raw())
+	w.WriteUint8(kind.Raw())
 
-	return PacketWriter{buf: buf, offset: HeaderSize}
+	return w
 }
 
 func (w *PacketWriter) WriteUint8(v uint8) *PacketWriter {
@@ -49,7 +48,6 @@ func (w *PacketWriter) WriteUint64(v uint64) *PacketWriter {
 	return w
 }
 
-// WriteBool writes 0x00 or 0x01.
 func (w *PacketWriter) WriteBool(v bool) *PacketWriter {
 	if v {
 		w.buf[w.offset] = 1

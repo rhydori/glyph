@@ -209,7 +209,7 @@ func ParseDirectives(name string, doc *ast.CommentGroup) (Packet, bool) {
 		text = strings.ReplaceAll(text, "--", " ")
 		text = strings.Join(strings.Fields(text), " ")
 
-		var flow, opcode, action string
+		var flow, id string
 
 		for part := range strings.FieldsSeq(text) {
 			keyValue := strings.SplitN(part, ":", 2)
@@ -223,14 +223,12 @@ func ParseDirectives(name string, doc *ast.CommentGroup) (Packet, bool) {
 			switch key {
 			case "flow":
 				flow = value
-			case "opcode":
-				opcode = value
-			case "action":
-				action = value
+			case "id":
+				id = value
 			}
 		}
 
-		if flow == "" || opcode == "" || action == "" {
+		if flow == "" || id == "" {
 			return Packet{}, false
 		}
 
@@ -240,10 +238,9 @@ func ParseDirectives(name string, doc *ast.CommentGroup) (Packet, bool) {
 		}
 
 		return Packet{
-			Name:   name,
-			Flow:   flowEnum,
-			Opcode: opcode,
-			Action: action,
+			Name: name,
+			Flow: flowEnum,
+			ID:   id,
 		}, true
 	}
 

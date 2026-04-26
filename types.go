@@ -81,8 +81,7 @@ type Field struct {
 type Packet struct {
 	Name   string
 	Flow   Flow
-	Opcode string // e.g. "Lobby"         -> OpcodeLobby
-	Action string // e.g. "LobbyCharList" -> LobbyCharList.Action()
+	ID     string // e.g. "AuthLogin", "LobbyCharList"
 	Fields []Field
 }
 

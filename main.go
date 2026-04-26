@@ -18,7 +18,7 @@ type Generated struct {
 
 func main() {
 	inDir := flag.String("in", "", "")
-	inFile := flag.String("file", "packets.go", "")
+	inFile := flag.String("file", "schema.go", "")
 	goOutDir := flag.String("goout", "./generated/", "")
 	gdOutDir := flag.String("gdout", "./generated/", "")
 	goFile := flag.String("go", "codec.go", "")
@@ -33,7 +33,7 @@ func main() {
 		}
 		if *inFile == "" {
 			logs.Error("Flag '-file' is required. Input file with packet definitions")
-			logs.Info("Example: -file packets.go")
+			logs.Info("Example: -file schema.go")
 		}
 		if *goOutDir == "" {
 			logs.Error("Flag '-goout' is required. Output directory for the Go codec")
